@@ -18,6 +18,10 @@
 
 import os
 
+# Set ALLOWED_HOSTS to wildcard BEFORE importing MCP to disable host validation
+os.environ['ALLOWED_HOSTS'] = '*'
+os.environ['MCP_DISABLE_HOST_VALIDATION'] = '1'
+
 # Monkey patch MCP's transport security to bypass host validation for proxy/tunnel support
 # This must be done before importing any MCP modules
 import sys

@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 
 const app = express();
 const PORT = parseInt(process.env.MCP_PORT || '8000');
@@ -117,9 +118,31 @@ app.get('/sse', async (req: Request, res: Response) => {
   await pythonClient.connect(pythonTransport);
   console.log(`${ts()} [CONNECTED ${sid}] Connected to Python MCP server`);
 
-  // Get tools list for logging
+  // Get tools from Python and register them in wrapper server
   const toolsList = await pythonClient.listTools();
   console.log(`${ts()} [TOOLS ${sid}] Python has ${toolsList.tools?.length || 0} tools`);
+
+  if (toolsList.tools) {
+    for (const tool of toolsList.tools) {
+      // Register each tool as a proxy to Python
+      sessionServer.tool(
+        tool.name,
+        tool.description || '',
+        async (args: any) => {
+          console.log(`${ts()} [TOOL_CALL ${sid}] ${tool.name}`);
+          try {
+            const result = await pythonClient.callTool({ name: tool.name, arguments: args });
+            console.log(`${ts()} [TOOL_RESULT ${sid}] ${tool.name} OK`);
+            return result;
+          } catch (error) {
+            console.error(`${ts()} [TOOL_ERROR ${sid}] ${tool.name}:`, error);
+            throw error;
+          }
+        }
+      );
+    }
+    console.log(`${ts()} [REGISTERED ${sid}] Registered ${toolsList.tools.length} tools`);
+  }
 
   await sessionServer.connect(transport);
   console.log(`${ts()} [SSE_READY ${sid}] SSE server ready`);
