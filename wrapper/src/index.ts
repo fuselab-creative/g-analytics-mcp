@@ -127,6 +127,21 @@ app.get('/sse', async (req: Request, res: Response) => {
     await pythonClient.connect(pythonTransport);
     console.log(`${ts()} [CONNECTED ${sessionId}] Connected to Python MCP server`);
 
+    // Fetch tools from Python server
+    try {
+      const toolsList = await pythonClient.listTools();
+      console.log(`${ts()} [TOOLS ${sessionId}] Fetched ${toolsList.tools?.length || 0} tools from Python`);
+      
+      // Register each tool
+      if (toolsList.tools && Array.isArray(toolsList.tools)) {
+        for (const tool of toolsList.tools) {
+          console.log(`${ts()} [REGISTER_TOOL ${sessionId}] ${tool.name}`);
+        }
+      }
+    } catch (error) {
+      console.error(`${ts()} [TOOLS_ERROR ${sessionId}]:`, error);
+    }
+
     // Intercept all requests by overriding the server's internal handler
     const originalHandleRequest = (server as any).handleRequest;
     if (originalHandleRequest) {
