@@ -127,25 +127,50 @@ app.get('/sse', async (req: Request, res: Response) => {
     await pythonClient.connect(pythonTransport);
     console.log(`${ts()} [CONNECTED ${sessionId}] Connected to Python MCP server`);
 
-    // Set up generic request handler to proxy all requests to Python
-    const originalOnRequest = (server as any).onrequest;
-    (server as any).onrequest = async (request: any, extra: any) => {
-      try {
-        console.log(`${ts()} [REQUEST ${sessionId}] ${request.method}`, request.params ? JSON.stringify(request.params).substring(0, 100) : '');
-        
-        // Forward any request to Python MCP server
-        const response = await pythonClient.request(
-          { method: request.method },
-          request.params || {}
-        );
-        
-        console.log(`${ts()} [RESPONSE ${sessionId}] ${request.method} OK`);
-        return response;
-      } catch (error) {
-        console.error(`${ts()} [PROXY_ERROR ${sessionId}] ${request.method}:`, error);
-        throw error;
+    // Intercept all requests by overriding the server's internal handler
+    const originalHandleRequest = (server as any).handleRequest;
+    if (originalHandleRequest) {
+      (server as any).handleRequest = async function(request: any) {
+        try {
+          console.log(`${ts()} [REQUEST ${sessionId}] ${request.method}`, request.params ? JSON.stringify(request.params).substring(0, 100) : '');
+          
+          // Forward to Python MCP server
+          const response = await pythonClient.request(
+            { method: request.method },
+            request.params || {}
+          );
+          
+          console.log(`${ts()} [RESPONSE ${sessionId}] ${request.method} OK`);
+          return response;
+        } catch (error) {
+          console.error(`${ts()} [PROXY_ERROR ${sessionId}] ${request.method}:`, error);
+          throw error;
+        }
+      }.bind(server);
+    } else {
+      console.warn(`${ts()} [WARN ${sessionId}] No handleRequest method found, trying _handleRequest`);
+      const originalHandleRequestAlt = (server as any)._handleRequest;
+      if (originalHandleRequestAlt) {
+        (server as any)._handleRequest = async function(request: any) {
+          try {
+            console.log(`${ts()} [REQUEST ${sessionId}] ${request.method}`, request.params ? JSON.stringify(request.params).substring(0, 100) : '');
+            
+            const response = await pythonClient.request(
+              { method: request.method },
+              request.params || {}
+            );
+            
+            console.log(`${ts()} [RESPONSE ${sessionId}] ${request.method} OK`);
+            return response;
+          } catch (error) {
+            console.error(`${ts()} [PROXY_ERROR ${sessionId}] ${request.method}:`, error);
+            throw error;
+          }
+        }.bind(server);
+      } else {
+        console.error(`${ts()} [ERROR ${sessionId}] Could not find request handler method to override`);
       }
-    };
+    }
 
     // Connect server to SSE transport first
     await server.connect(sseTransport);
