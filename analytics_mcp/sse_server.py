@@ -41,12 +41,12 @@ def run_sse_server() -> None:
     host = os.getenv("MCP_SSE_HOST", os.getenv("MCP_HOST", "127.0.0.1"))
     port = int(os.getenv("MCP_SSE_PORT", os.getenv("MCP_PORT", "8000")))
     
+    # Disable host validation for external connections
+    os.environ["MCP_DISABLE_HOST_VALIDATION"] = "1"
+    
     # Configure FastMCP settings for host and port
     mcp.settings.host = host
     mcp.settings.port = port
-    
-    # Allow all hosts for external connections (disable Host header validation)
-    mcp.settings.allowed_hosts = ["*"]
     
     print(f"Starting Google Analytics MCP server with SSE transport on {host}:{port}")
     
