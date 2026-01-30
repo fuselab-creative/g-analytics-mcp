@@ -34,8 +34,8 @@ COPY wrapper/src/ ./src/
 # Build TypeScript
 RUN npm run build
 
-# Create non-root user
-RUN useradd -m -u 1000 mcpuser && \
+# Create non-root user (use UID 1001 to avoid conflicts)
+RUN useradd -m -u 1001 mcpuser && \
     chown -R mcpuser:mcpuser /app
 
 USER mcpuser
