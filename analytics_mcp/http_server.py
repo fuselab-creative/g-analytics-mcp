@@ -21,12 +21,20 @@ import os
 # Monkey patch MCP's transport security to bypass host validation for proxy/tunnel support
 # This must be done before importing any MCP modules
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
-# Create a mock module that bypasses validation
-mock_transport_security = MagicMock()
-mock_transport_security.validate_request_headers = lambda *args, **kwargs: None
-sys.modules['mcp.server.transport_security'] = mock_transport_security
+# Create a mock security class that bypasses validation
+class MockTransportSecurity:
+    async def validate_request(self, *args, **kwargs):
+        return None
+    
+    def validate_request_headers(self, *args, **kwargs):
+        return None
+
+# Create mock module
+mock_module = MagicMock()
+mock_module.TransportSecurity = MockTransportSecurity
+sys.modules['mcp.server.transport_security'] = mock_module
 
 import contextlib
 from starlette.applications import Starlette
