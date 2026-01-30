@@ -39,11 +39,11 @@ def run_sse_server() -> None:
     """
     # Get host and port from environment variables
     host = os.getenv("MCP_SSE_HOST", os.getenv("MCP_HOST", "127.0.0.1"))
-    port = os.getenv("MCP_SSE_PORT", os.getenv("MCP_PORT", "8000"))
+    port = int(os.getenv("MCP_SSE_PORT", os.getenv("MCP_PORT", "8000")))
     
-    # Set environment variables that uvicorn will use
-    os.environ["HOST"] = host
-    os.environ["PORT"] = str(port)
+    # Configure FastMCP settings for host and port
+    mcp.settings.host = host
+    mcp.settings.port = port
     
     print(f"Starting Google Analytics MCP server with SSE transport on {host}:{port}")
     
