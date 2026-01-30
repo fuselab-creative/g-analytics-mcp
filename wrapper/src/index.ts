@@ -10,6 +10,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { 
+  CallToolRequestSchema,
+  ListToolsRequestSchema
+} from '@modelcontextprotocol/sdk/types.js';
 
 const app = express();
 const PORT = parseInt(process.env.MCP_PORT || '8000');
@@ -127,65 +131,20 @@ app.get('/sse', async (req: Request, res: Response) => {
     await pythonClient.connect(pythonTransport);
     console.log(`${ts()} [CONNECTED ${sessionId}] Connected to Python MCP server`);
 
-    // Fetch tools from Python server
-    try {
-      const toolsList = await pythonClient.listTools();
-      console.log(`${ts()} [TOOLS ${sessionId}] Fetched ${toolsList.tools?.length || 0} tools from Python`);
-      
-      // Register each tool
-      if (toolsList.tools && Array.isArray(toolsList.tools)) {
-        for (const tool of toolsList.tools) {
-          console.log(`${ts()} [REGISTER_TOOL ${sessionId}] ${tool.name}`);
-        }
-      }
-    } catch (error) {
-      console.error(`${ts()} [TOOLS_ERROR ${sessionId}]:`, error);
-    }
+    // Set up request handlers to proxy to Python
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
+      console.log(`${ts()} [REQUEST ${sessionId}] tools/list`);
+      const result = await pythonClient.listTools();
+      console.log(`${ts()} [RESPONSE ${sessionId}] tools/list - ${result.tools?.length || 0} tools`);
+      return result;
+    });
 
-    // Intercept all requests by overriding the server's internal handler
-    const originalHandleRequest = (server as any).handleRequest;
-    if (originalHandleRequest) {
-      (server as any).handleRequest = async function(request: any) {
-        try {
-          console.log(`${ts()} [REQUEST ${sessionId}] ${request.method}`, request.params ? JSON.stringify(request.params).substring(0, 100) : '');
-          
-          // Forward to Python MCP server
-          const response = await pythonClient.request(
-            { method: request.method },
-            request.params || {}
-          );
-          
-          console.log(`${ts()} [RESPONSE ${sessionId}] ${request.method} OK`);
-          return response;
-        } catch (error) {
-          console.error(`${ts()} [PROXY_ERROR ${sessionId}] ${request.method}:`, error);
-          throw error;
-        }
-      }.bind(server);
-    } else {
-      console.warn(`${ts()} [WARN ${sessionId}] No handleRequest method found, trying _handleRequest`);
-      const originalHandleRequestAlt = (server as any)._handleRequest;
-      if (originalHandleRequestAlt) {
-        (server as any)._handleRequest = async function(request: any) {
-          try {
-            console.log(`${ts()} [REQUEST ${sessionId}] ${request.method}`, request.params ? JSON.stringify(request.params).substring(0, 100) : '');
-            
-            const response = await pythonClient.request(
-              { method: request.method },
-              request.params || {}
-            );
-            
-            console.log(`${ts()} [RESPONSE ${sessionId}] ${request.method} OK`);
-            return response;
-          } catch (error) {
-            console.error(`${ts()} [PROXY_ERROR ${sessionId}] ${request.method}:`, error);
-            throw error;
-          }
-        }.bind(server);
-      } else {
-        console.error(`${ts()} [ERROR ${sessionId}] Could not find request handler method to override`);
-      }
-    }
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      console.log(`${ts()} [REQUEST ${sessionId}] tools/call - ${request.params.name}`);
+      const result = await pythonClient.callTool(request.params);
+      console.log(`${ts()} [RESPONSE ${sessionId}] tools/call - ${request.params.name} OK`);
+      return result;
+    });
 
     // Connect server to SSE transport first
     await server.connect(sseTransport);
