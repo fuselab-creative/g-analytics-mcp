@@ -37,7 +37,15 @@ def run_sse_server() -> None:
     The SSE transport will use the host and port configured via environment variables
     or default settings.
     """
-    print("Starting Google Analytics MCP server with SSE transport")
+    # Get host and port from environment variables
+    host = os.getenv("MCP_SSE_HOST", os.getenv("MCP_HOST", "127.0.0.1"))
+    port = os.getenv("MCP_SSE_PORT", os.getenv("MCP_PORT", "8000"))
+    
+    # Set environment variables that uvicorn will use
+    os.environ["HOST"] = host
+    os.environ["PORT"] = str(port)
+    
+    print(f"Starting Google Analytics MCP server with SSE transport on {host}:{port}")
     
     # Run the server with SSE transport
     mcp.run(transport='sse')
