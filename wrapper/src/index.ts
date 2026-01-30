@@ -176,6 +176,8 @@ app.get('/sse', async (req: Request, res: Response) => {
 
 // POST endpoint for SSE messages - forward to SSEServerTransport
 app.post('/sse/message', async (req: Request, res: Response) => {
+  console.log(`${ts()} [POST_RECEIVED] Query:`, req.query, 'Body:', JSON.stringify(req.body).substring(0, 100));
+  
   const sessionId = req.query?.sessionId as string;
   const session = sessions.get(sessionId);
 
