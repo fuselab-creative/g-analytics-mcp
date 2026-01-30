@@ -18,27 +18,15 @@
 
 import os
 
-# Set ALLOWED_HOSTS to wildcard BEFORE importing MCP to disable host validation
-os.environ['ALLOWED_HOSTS'] = '*'
-os.environ['MCP_DISABLE_HOST_VALIDATION'] = '1'
-
-# Monkey patch MCP's transport security to bypass host validation for proxy/tunnel support
-# This must be done before importing any MCP modules
-import sys
-from unittest.mock import MagicMock, AsyncMock
-
-# Create a mock security class that bypasses validation
-class MockTransportSecurity:
+# Patch MCP SSE transport to bypass host validation
+# This must be done before creating any SSE transports
+class NoOpSecurity:
+    """Security class that bypasses all validation for proxy/tunnel support"""
     async def validate_request(self, *args, **kwargs):
-        return None
+        return None  # None means validation passed
     
     def validate_request_headers(self, *args, **kwargs):
         return None
-
-# Create mock module
-mock_module = MagicMock()
-mock_module.TransportSecurity = MockTransportSecurity
-sys.modules['mcp.server.transport_security'] = mock_module
 
 import contextlib
 from starlette.applications import Starlette
@@ -60,6 +48,19 @@ async def lifespan(app: Starlette):
 # Create both transport apps
 streamable_http = mcp.streamable_http_app()
 sse_legacy = mcp.sse_app()
+
+# Patch SSE transport to bypass host validation
+# The SSE app contains routes that create SSEServerTransport instances
+# We need to patch the transport creation
+import mcp.server.sse as sse_module
+original_sse_transport_init = sse_module.SSEServerTransport.__init__
+
+def patched_sse_transport_init(self, *args, **kwargs):
+    original_sse_transport_init(self, *args, **kwargs)
+    # Replace the security validator with our no-op version
+    self._security = NoOpSecurity()
+
+sse_module.SSEServerTransport.__init__ = patched_sse_transport_init
 
 # Create Starlette app with both endpoints
 from starlette.routing import Route

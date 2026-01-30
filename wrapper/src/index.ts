@@ -118,31 +118,28 @@ app.get('/sse', async (req: Request, res: Response) => {
   await pythonClient.connect(pythonTransport);
   console.log(`${ts()} [CONNECTED ${sid}] Connected to Python MCP server`);
 
-  // Get tools from Python and register them in wrapper server
+  // Get tools from Python for logging
   const toolsList = await pythonClient.listTools();
   console.log(`${ts()} [TOOLS ${sid}] Python has ${toolsList.tools?.length || 0} tools`);
 
-  if (toolsList.tools) {
-    for (const tool of toolsList.tools) {
-      // Register each tool as a proxy to Python
-      sessionServer.tool(
-        tool.name,
-        tool.description || '',
-        async (args: any) => {
-          console.log(`${ts()} [TOOL_CALL ${sid}] ${tool.name}`);
-          try {
-            const result = await pythonClient.callTool({ name: tool.name, arguments: args });
-            console.log(`${ts()} [TOOL_RESULT ${sid}] ${tool.name} OK`);
-            return result;
-          } catch (error) {
-            console.error(`${ts()} [TOOL_ERROR ${sid}] ${tool.name}:`, error);
-            throw error;
-          }
-        }
-      );
-    }
-    console.log(`${ts()} [REGISTERED ${sid}] Registered ${toolsList.tools.length} tools`);
-  }
+  // Override McpServer's request handler to proxy all requests to Python
+  const originalSetRequestHandler = sessionServer.setRequestHandler.bind(sessionServer);
+  
+  // Intercept tools/list requests
+  sessionServer.setRequestHandler({ method: 'tools/list' } as any, async () => {
+    console.log(`${ts()} [REQUEST ${sid}] tools/list`);
+    const result = await pythonClient.listTools();
+    console.log(`${ts()} [RESPONSE ${sid}] tools/list - ${result.tools?.length || 0} tools`);
+    return result;
+  });
+
+  // Intercept tools/call requests
+  sessionServer.setRequestHandler({ method: 'tools/call' } as any, async (request: any) => {
+    console.log(`${ts()} [REQUEST ${sid}] tools/call - ${request.params?.name}`);
+    const result = await pythonClient.callTool(request.params);
+    console.log(`${ts()} [RESPONSE ${sid}] tools/call - ${request.params?.name} OK`);
+    return result;
+  });
 
   await sessionServer.connect(transport);
   console.log(`${ts()} [SSE_READY ${sid}] SSE server ready`);
