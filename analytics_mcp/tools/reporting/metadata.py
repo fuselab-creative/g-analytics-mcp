@@ -309,9 +309,7 @@ def get_order_bys_hints():
     """
 
 
-@mcp.tool(
-    title="Retrieves the custom Core Reporting dimensions and metrics for a specific property"
-)
+@mcp.tool()
 async def get_custom_dimensions_and_metrics(
     property_id: int | str,
 ) -> Dict[str, List[Dict[str, Any]]]:

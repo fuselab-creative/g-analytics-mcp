@@ -12,7 +12,8 @@ dependencies = [
     "google-analytics-admin==0.27.0",
     "google-auth~=2.40",
     "mcp[cli]>=1.2.0",
-    "httpx>=0.28.1"
+    "httpx>=0.28.1",
+    "python-dotenv>=1.0.0"
 ]
 keywords = [
     "google analytics",
@@ -48,6 +49,8 @@ issues = "https://github.com/googleanalytics/google-analytics-mcp/issues"
 analytics-mcp = "analytics_mcp.server:run_server"
 # The previous name of the script. Kept for backwards compatibility.
 google-analytics-mcp = "analytics_mcp.server:run_server"
+# SSE transport entry point
+analytics-mcp-sse = "analytics_mcp.sse_server:run_sse_server"
 
 [project.optional-dependencies]
 dev = [

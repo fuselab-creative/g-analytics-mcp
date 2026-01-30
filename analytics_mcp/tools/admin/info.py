@@ -39,7 +39,7 @@ async def get_account_summaries() -> List[Dict[str, Any]]:
     return all_pages
 
 
-@mcp.tool(title="List links to Google Ads accounts")
+@mcp.tool()
 async def list_google_ads_links(property_id: int | str) -> List[Dict[str, Any]]:
     """Returns a list of links to Google Ads accounts for a property.
 
@@ -60,7 +60,7 @@ async def list_google_ads_links(property_id: int | str) -> List[Dict[str, Any]]:
     return all_pages
 
 
-@mcp.tool(title="Gets details about a property")
+@mcp.tool()
 async def get_property_details(property_id: int | str) -> Dict[str, Any]:
     """Returns details about a property.
     Args:
@@ -76,7 +76,7 @@ async def get_property_details(property_id: int | str) -> Dict[str, Any]:
     return proto_to_dict(response)
 
 
-@mcp.tool(title="Gets property annotations for a property")
+@mcp.tool()
 async def list_property_annotations(
     property_id: int | str,
 ) -> List[Dict[str, Any]]:

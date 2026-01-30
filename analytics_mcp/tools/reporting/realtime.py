@@ -168,6 +168,5 @@ async def run_realtime_report(
 # including the `run_realtime_report` method's docstring.
 mcp.add_tool(
     run_realtime_report,
-    title="Run a Google Analytics realtime report using the Data API",
     description=_run_realtime_report_description(),
 )

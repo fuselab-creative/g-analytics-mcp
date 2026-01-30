@@ -179,6 +179,5 @@ async def run_report(
 # including the `run_report` method's docstring.
 mcp.add_tool(
     run_report,
-    title="Run a Google Analytics Data API report using the Data API",
     description=_run_report_description(),
 )
