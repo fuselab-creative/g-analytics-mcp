@@ -32,7 +32,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = join(__dirname, '..', '..');
 const wrapperRoot = join(__dirname, '..');
-const pythonBin = join(wrapperRoot, 'venv', 'bin', 'python');
+
+// Use venv Python if available (local dev), otherwise use system python3 (Docker)
+const venvPython = join(wrapperRoot, 'venv', 'bin', 'python');
+const pythonBin = require('fs').existsSync(venvPython) ? venvPython : 'python3';
 
 // Simple JSON-RPC proxy to Python MCP server
 class MCPProxy extends EventEmitter {
