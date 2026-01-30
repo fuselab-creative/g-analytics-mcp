@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import express from 'express';
 import cors from 'cors';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { EventEmitter } from 'events';
 
 const app = express();
 const PORT = parseInt(process.env.MCP_PORT || '8000');
@@ -27,63 +27,117 @@ app.get('/health', (req, res) => {
   res.send('OK');
 });
 
-// Get project root directory (two levels up from dist/index.js -> wrapper -> project root)
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-
+// Get project root directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = join(__dirname, '..', '..');
 const wrapperRoot = join(__dirname, '..');
 const pythonBin = join(wrapperRoot, 'venv', 'bin', 'python');
 
-// Create Python MCP server process - run directly without module import
-const pythonServer = spawn(pythonBin, ['analytics_mcp/server.py'], {
-  stdio: ['pipe', 'pipe', 'pipe'],
-  cwd: projectRoot,
-  env: {
-    ...process.env,
-    PYTHONUNBUFFERED: '1',
-    PYTHONPATH: projectRoot
+// Simple JSON-RPC proxy to Python MCP server
+class MCPProxy extends EventEmitter {
+  private pythonServer: ChildProcess;
+  private messageBuffer: string = '';
+  private pendingRequests: Map<number | string, (response: any) => void> = new Map();
+
+  constructor() {
+    super();
+    
+    // Start Python MCP server
+    this.pythonServer = spawn(pythonBin, ['analytics_mcp/server.py'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        PYTHONPATH: projectRoot
+      }
+    });
+
+    // Handle stdout (JSON-RPC responses from Python)
+    this.pythonServer.stdout?.on('data', (data) => {
+      this.messageBuffer += data.toString();
+      this.processMessages();
+    });
+
+    // Log stderr
+    this.pythonServer.stderr?.on('data', (data) => {
+      console.error(`[Python MCP] ${data.toString()}`);
+    });
+
+    this.pythonServer.on('error', (error) => {
+      console.error('Failed to start Python MCP server:', error);
+      process.exit(1);
+    });
+
+    this.pythonServer.on('exit', (code) => {
+      console.error(`Python MCP server exited with code ${code}`);
+      process.exit(code || 1);
+    });
   }
-});
 
-// Log Python stderr
-pythonServer.stderr?.on('data', (data) => {
-  console.error(`[Python MCP] ${data.toString()}`);
-});
+  private processMessages() {
+    const lines = this.messageBuffer.split('\n');
+    this.messageBuffer = lines.pop() || '';
 
-pythonServer.on('error', (error) => {
-  console.error('Failed to start Python MCP server:', error);
-  process.exit(1);
-});
-
-pythonServer.on('exit', (code) => {
-  console.error(`Python MCP server exited with code ${code}`);
-  process.exit(code || 1);
-});
-
-// Create MCP client connected to Python server via stdio
-const transport = new StdioClientTransport({
-  command: pythonBin,
-  args: ['analytics_mcp/server.py'],
-  cwd: projectRoot,
-  env: {
-    ...process.env,
-    PYTHONUNBUFFERED: '1',
-    PYTHONPATH: projectRoot
+    for (const line of lines) {
+      if (line.trim()) {
+        try {
+          const message = JSON.parse(line);
+          this.handleMessage(message);
+        } catch (error) {
+          console.error('Failed to parse message:', line, error);
+        }
+      }
+    }
   }
-});
 
-const client = new Client({
-  name: 'analytics-mcp-wrapper',
-  version: '1.0.0'
-}, {
-  capabilities: {}
-});
+  private handleMessage(message: any) {
+    if (message.id !== undefined && this.pendingRequests.has(message.id)) {
+      const resolve = this.pendingRequests.get(message.id)!;
+      this.pendingRequests.delete(message.id);
+      resolve(message);
+    } else {
+      // Notification or unsolicited message
+      this.emit('notification', message);
+    }
+  }
 
-// Initialize client connection
-await client.connect(transport);
+  async sendRequest(request: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (request.id !== undefined) {
+        this.pendingRequests.set(request.id, resolve);
+      }
+
+      const message = JSON.stringify(request) + '\n';
+      this.pythonServer.stdin?.write(message, (error) => {
+        if (error) {
+          if (request.id !== undefined) {
+            this.pendingRequests.delete(request.id);
+          }
+          reject(error);
+        } else if (request.id === undefined) {
+          // Notification - no response expected
+          resolve(null);
+        }
+      });
+
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        if (request.id !== undefined && this.pendingRequests.has(request.id)) {
+          this.pendingRequests.delete(request.id);
+          reject(new Error('Request timeout'));
+        }
+      }, 30000);
+    });
+  }
+
+  close() {
+    this.pythonServer.kill();
+  }
+}
+
+const mcpProxy = new MCPProxy();
 
 console.log('Connected to Python MCP server via stdio');
 
@@ -107,78 +161,46 @@ app.get('/sse', async (req, res) => {
   });
 });
 
-// POST endpoint for MCP messages
-app.post('/sse/message', async (req, res) => {
+// POST endpoint for MCP messages (both /mcp and /sse endpoints)
+const handleMCPRequest = async (req: express.Request, res: express.Response) => {
   try {
     const message = req.body;
     
-    // Forward message to Python MCP server
-    const response = await client.request(message, message.params);
-    
-    res.json(response);
-  } catch (error) {
-    console.error('Error forwarding message:', error);
-    res.status(500).json({
-      jsonrpc: '2.0',
-      error: {
-        code: -32603,
-        message: error instanceof Error ? error.message : 'Internal error'
-      },
-      id: req.body.id
-    });
-  }
-});
-
-// Streamable HTTP endpoint (modern MCP transport)
-app.post('/mcp', async (req, res) => {
-  try {
-    const message = req.body;
+    // Forward message to Python MCP server and get response
+    const response = await mcpProxy.sendRequest(message);
     
     // Check if client accepts SSE
     const acceptHeader = req.headers.accept || '';
     const supportsSSE = acceptHeader.includes('text/event-stream');
     
     if (supportsSSE && message.method) {
-      // Start SSE stream for request
+      // Return as SSE stream
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
-      
-      try {
-        const response = await client.request(message, message.params);
-        
-        // Send response as SSE event
-        res.write(`data: ${JSON.stringify(response)}\n\n`);
-        res.end();
-      } catch (error) {
-        const errorResponse = {
-          jsonrpc: '2.0',
-          error: {
-            code: -32603,
-            message: error instanceof Error ? error.message : 'Internal error'
-          },
-          id: message.id
-        };
-        res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
-        res.end();
-      }
+      res.write(`data: ${JSON.stringify(response)}\n\n`);
+      res.end();
     } else {
-      // Return JSON response
-      const response = await client.request(message, message.params);
+      // Return as JSON
       res.json(response);
     }
   } catch (error) {
     console.error('Error handling MCP request:', error);
-    res.status(500).json({
+    const errorResponse = {
       jsonrpc: '2.0',
       error: {
         code: -32603,
         message: error instanceof Error ? error.message : 'Internal error'
       },
       id: req.body.id
-    });
+    };
+    
+    res.status(500).json(errorResponse);
   }
-});
+};
+
+app.post('/mcp', handleMCPRequest);
+app.post('/sse', handleMCPRequest);
 
 // Start server
 app.listen(PORT, HOST, () => {
@@ -191,12 +213,12 @@ app.listen(PORT, HOST, () => {
 // Cleanup on exit
 process.on('SIGINT', () => {
   console.log('Shutting down...');
-  pythonServer.kill();
+  mcpProxy.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('Shutting down...');
-  pythonServer.kill();
+  mcpProxy.close();
   process.exit(0);
 });
