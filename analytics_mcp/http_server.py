@@ -21,7 +21,12 @@ import os
 # Configure MCP to accept requests from any host (for proxies, tunnels, etc.)
 # MUST be set before importing MCP modules
 if "ALLOWED_HOSTS" not in os.environ:
-    os.environ["ALLOWED_HOSTS"] = "*"
+    # Allow localhost, 0.0.0.0, and any IP addresses (for proxies/tunnels)
+    # MCP doesn't support "*" wildcard, so we need to be permissive with validation
+    os.environ["ALLOWED_HOSTS"] = "localhost,127.0.0.1,0.0.0.0"
+    
+# Disable MCP's strict host validation entirely
+os.environ["MCP_DISABLE_HOST_VALIDATION"] = "1"
 
 import contextlib
 from starlette.applications import Starlette
