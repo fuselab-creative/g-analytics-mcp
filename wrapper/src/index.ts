@@ -9,11 +9,7 @@ import { existsSync } from 'fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { 
-  CallToolRequestSchema,
-  ListToolsRequestSchema
-} from '@modelcontextprotocol/sdk/types.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const app = express();
 const PORT = parseInt(process.env.MCP_PORT || '8000');
@@ -45,25 +41,28 @@ const pythonBin = existsSync(venvPython) ? venvPython : 'python3';
 
 // Session management
 interface SessionData {
-  server: Server;
-  sseTransport: SSEServerTransport;
+  transport: SSEServerTransport;
+  server: McpServer;
   pythonClient: Client;
-  pythonTransport: StdioClientTransport;
   lastActivity: number;
 }
 
 const sessions = new Map<string, SessionData>();
 
 // Cleanup inactive sessions
-setInterval(() => {
+setInterval(async () => {
   const now = Date.now();
   const SESSION_TIMEOUT = 30 * 60 * 1000;
 
   for (const [sessionId, session] of sessions.entries()) {
     if (now - session.lastActivity > SESSION_TIMEOUT) {
       console.log(`${ts()} [CLEANUP] Inactive session: ${sessionId}`);
-      session.server.close().catch(() => {});
-      session.pythonClient.close().catch(() => {});
+      try {
+        await session.server.close();
+      } catch (e) {}
+      try {
+        await session.pythonClient.close();
+      } catch (e) {}
       sessions.delete(sessionId);
     }
   }
@@ -82,130 +81,94 @@ app.get('/', (req, res) => {
 
 // SSE endpoint - create MCP Server that proxies to Python MCP server
 app.get('/sse', async (req: Request, res: Response) => {
-  try {
-    // Create SSE transport for client
-    const sseTransport = new SSEServerTransport('/sse/message', res as any);
-    const sessionId = sseTransport.sessionId;
+  const sessionId = req.query?.sessionId as string | undefined;
 
-    console.log(`${ts()} [SSE_CONNECT] New session: ${sessionId}`);
-
-    // Create MCP Server to handle SSE client requests
-    const server = new Server(
-      {
-        name: 'analytics-mcp-wrapper',
-        version: '1.0.0'
-      },
-      {
-        capabilities: {
-          tools: {},
-          prompts: {},
-          resources: {}
-        }
-      }
-    );
-
-    // Create stdio transport to Python MCP server
-    const pythonTransport = new StdioClientTransport({
-      command: pythonBin,
-      args: ['analytics_mcp/server.py'],
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        PYTHONUNBUFFERED: '1',
-        PYTHONPATH: projectRoot
-      }
-    });
-
-    // Create MCP client to connect to Python server
-    const pythonClient = new Client(
-      {
-        name: 'analytics-mcp-wrapper-client',
-        version: '1.0.0'
-      },
-      {
-        capabilities: {}
-      }
-    );
-
-    // Connect to Python MCP server
-    await pythonClient.connect(pythonTransport);
-    console.log(`${ts()} [CONNECTED ${sessionId}] Connected to Python MCP server`);
-
-    // Set up request handlers to proxy to Python
-    server.setRequestHandler(ListToolsRequestSchema, async () => {
-      console.log(`${ts()} [REQUEST ${sessionId}] tools/list`);
-      const result = await pythonClient.listTools();
-      console.log(`${ts()} [RESPONSE ${sessionId}] tools/list - ${result.tools?.length || 0} tools`);
-      return result;
-    });
-
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      console.log(`${ts()} [REQUEST ${sessionId}] tools/call - ${request.params.name}`);
-      const result = await pythonClient.callTool(request.params);
-      console.log(`${ts()} [RESPONSE ${sessionId}] tools/call - ${request.params.name} OK`);
-      return result;
-    });
-
-    // Connect server to SSE transport first
-    await server.connect(sseTransport);
-    console.log(`${ts()} [SSE_READY ${sessionId}] SSE server ready for client`);
-
-    // Store session with SSE transport
-    sessions.set(sessionId, {
-      server,
-      sseTransport,
-      pythonClient,
-      pythonTransport,
-      lastActivity: Date.now()
-    });
-
-    // Handle cleanup
-    req.on('close', async () => {
-      console.log(`${ts()} [SSE_CLOSE] Session disconnected: ${sessionId}`);
-      await server.close().catch(() => {});
-      await pythonClient.close().catch(() => {});
-      sessions.delete(sessionId);
-    });
-    
-  } catch (error) {
-    console.error(`${ts()} [SSE_ERROR]:`, error);
-    if (!res.headersSent) {
-      res.status(500).send('Failed to establish SSE connection');
-    }
-  }
-});
-
-// POST endpoint for SSE messages - forward to SSEServerTransport
-app.post('/sse/message', async (req: Request, res: Response) => {
-  console.log(`${ts()} [POST_RECEIVED] Query:`, req.query, 'Body:', JSON.stringify(req.body).substring(0, 100));
-  
-  const sessionId = req.query?.sessionId as string;
-  const session = sessions.get(sessionId);
-
-  if (!session) {
-    console.warn(`${ts()} [NO_SESSION] ${sessionId}`);
-    res.status(404).send('No session found');
+  if (sessionId) {
+    console.error(`${ts()} [SSE_WARN] Client reconnecting with sessionId=${sessionId}`);
+    res.status(400).send('Session already exists');
     return;
   }
 
-  session.lastActivity = Date.now();
-  
-  console.log(`${ts()} [POST_MESSAGE ${sessionId}] Received message:`, JSON.stringify(req.body).substring(0, 200));
-  
-  try {
-    // Use the stored SSEServerTransport to handle the message
-    if (session.sseTransport && typeof session.sseTransport.handlePostMessage === 'function') {
-      console.log(`${ts()} [CALLING_HANDLER ${sessionId}] Calling handlePostMessage`);
-      await session.sseTransport.handlePostMessage(req as any, res as any);
-      console.log(`${ts()} [HANDLER_DONE ${sessionId}] handlePostMessage completed`);
-    } else {
-      console.error(`${ts()} [ERROR ${sessionId}] SSEServerTransport not found or no handlePostMessage method`);
-      console.error(`${ts()} [DEBUG ${sessionId}] Transport:`, session.sseTransport, 'Methods:', Object.keys(session.sseTransport || {}));
-      res.status(500).send('Transport not available');
+  const transport = new SSEServerTransport('/sse/message', res as any);
+  const sid = transport.sessionId;
+
+  console.log(`${ts()} [SSE_CONNECT] New session: ${sid}`);
+
+  // Create MCP Server
+  const sessionServer = new McpServer({ name: 'Google Analytics MCP Wrapper', version: '1.0.0' });
+
+  // Create Python client
+  const pythonTransport = new StdioClientTransport({
+    command: pythonBin,
+    args: ['analytics_mcp/server.py'],
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PYTHONUNBUFFERED: '1',
+      PYTHONPATH: projectRoot
     }
-  } catch (error) {
-    console.error(`${ts()} [POST_ERROR ${sessionId}]:`, error);
-    res.status(500).send('Failed to process message');
+  });
+
+  const pythonClient = new Client(
+    { name: 'wrapper-client', version: '1.0.0' },
+    { capabilities: {} }
+  );
+
+  await pythonClient.connect(pythonTransport);
+  console.log(`${ts()} [CONNECTED ${sid}] Connected to Python MCP server`);
+
+  // Get tools list for logging
+  const toolsList = await pythonClient.listTools();
+  console.log(`${ts()} [TOOLS ${sid}] Python has ${toolsList.tools?.length || 0} tools`);
+
+  await sessionServer.connect(transport);
+  console.log(`${ts()} [SSE_READY ${sid}] SSE server ready`);
+
+  sessions.set(sid, {
+    transport,
+    server: sessionServer,
+    pythonClient,
+    lastActivity: Date.now()
+  });
+
+  let isClosing = false;
+  transport.onclose = async () => {
+    if (isClosing) return;
+    isClosing = true;
+
+    const session = sessions.get(sid);
+    if (!session) return;
+
+    console.log(`${ts()} [SSE_CLOSE] Session disconnected: ${sid}`);
+
+    try {
+      await session.server.close();
+    } catch (e) {}
+
+    try {
+      await session.pythonClient.close();
+    } catch (e) {}
+
+    sessions.delete(sid);
+  };
+});
+
+// POST endpoint for SSE messages
+app.post('/sse/message', async (req: Request, res: Response) => {
+  const sessionId = req.query?.sessionId as string;
+  const session = sessions.get(sessionId);
+  
+  if (session) {
+    try {
+      session.lastActivity = Date.now();
+      await session.transport.handlePostMessage(req as any, res as any);
+    } catch (err) {
+      console.error(`${ts()} [MESSAGE_ERROR]:`, err);
+      if (!res.headersSent) res.status(500).send('Failed to handle message');
+    }
+  } else {
+    console.warn(`${ts()} [NO_SESSION] ${sessionId}`);
+    if (!res.headersSent) res.status(404).send('No session found');
   }
 });
 
@@ -221,8 +184,8 @@ app.listen(PORT, HOST, () => {
 process.on('SIGINT', async () => {
   console.log(`${ts()} Shutting down...`);
   for (const [sessionId, session] of sessions.entries()) {
-    await session.server.close().catch(() => {});
-    await session.pythonClient.close().catch(() => {});
+    try { await session.server.close(); } catch (e) {}
+    try { await session.pythonClient.close(); } catch (e) {}
   }
   process.exit(0);
 });
@@ -230,8 +193,8 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log(`${ts()} Shutting down...`);
   for (const [sessionId, session] of sessions.entries()) {
-    await session.server.close().catch(() => {});
-    await session.pythonClient.close().catch(() => {});
+    try { await session.server.close(); } catch (e) {}
+    try { await session.pythonClient.close(); } catch (e) {}
   }
   process.exit(0);
 });
