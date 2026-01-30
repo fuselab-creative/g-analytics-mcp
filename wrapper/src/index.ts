@@ -42,6 +42,7 @@ const pythonBin = existsSync(venvPython) ? venvPython : 'python3';
 // Session management
 interface SessionData {
   server: Server;
+  sseTransport: SSEServerTransport;
   pythonClient: Client;
   pythonTransport: StdioClientTransport;
   lastActivity: number;
@@ -150,9 +151,10 @@ app.get('/sse', async (req: Request, res: Response) => {
     await server.connect(sseTransport);
     console.log(`${ts()} [SSE_READY ${sessionId}] SSE server ready for client`);
 
-    // Store session
+    // Store session with SSE transport
     sessions.set(sessionId, {
       server,
+      sseTransport,
       pythonClient,
       pythonTransport,
       lastActivity: Date.now()
@@ -192,12 +194,14 @@ app.post('/sse/message', async (req: Request, res: Response) => {
   console.log(`${ts()} [POST_MESSAGE ${sessionId}] Received message:`, JSON.stringify(req.body).substring(0, 200));
   
   try {
-    // The SSEServerTransport should have a handlePostMessage method
-    const transport = (session.server as any)._transport;
-    if (transport && typeof transport.handlePostMessage === 'function') {
-      await transport.handlePostMessage(req as any, res as any);
+    // Use the stored SSEServerTransport to handle the message
+    if (session.sseTransport && typeof session.sseTransport.handlePostMessage === 'function') {
+      console.log(`${ts()} [CALLING_HANDLER ${sessionId}] Calling handlePostMessage`);
+      await session.sseTransport.handlePostMessage(req as any, res as any);
+      console.log(`${ts()} [HANDLER_DONE ${sessionId}] handlePostMessage completed`);
     } else {
-      console.error(`${ts()} [ERROR ${sessionId}] SSEServerTransport not found or no handlePostMessage`);
+      console.error(`${ts()} [ERROR ${sessionId}] SSEServerTransport not found or no handlePostMessage method`);
+      console.error(`${ts()} [DEBUG ${sessionId}] Transport:`, session.sseTransport, 'Methods:', Object.keys(session.sseTransport || {}));
       res.status(500).send('Transport not available');
     }
   } catch (error) {
