@@ -87,7 +87,13 @@ def run_http_server() -> None:
     print(f"Legacy SSE endpoint: http://{host}:{port}/sse (backward compatibility)")
     print(f"Both endpoints support the same MCP tools and capabilities")
     
-    uvicorn.run(starlette_app, host=host, port=port)
+    uvicorn.run(
+        starlette_app, 
+        host=host, 
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips="*"
+    )
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
     # Expose port for HTTP/SSE transport
     ports:
-      - "${MCP_PORT:-8000}:8000"
+      - "${MCP_PORT:-8000}:${MCP_PORT:-8000}"
     networks:
       - mcp-network
 
