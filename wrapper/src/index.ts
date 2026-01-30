@@ -130,14 +130,18 @@ app.get('/sse', async (req: Request, res: Response) => {
     const originalOnRequest = (server as any).onrequest;
     (server as any).onrequest = async (request: any, extra: any) => {
       try {
+        console.log(`${ts()} [REQUEST ${sessionId}] ${request.method}`, request.params ? JSON.stringify(request.params).substring(0, 100) : '');
+        
         // Forward any request to Python MCP server
         const response = await pythonClient.request(
           { method: request.method },
           request.params || {}
         );
+        
+        console.log(`${ts()} [RESPONSE ${sessionId}] ${request.method} OK`);
         return response;
       } catch (error) {
-        console.error(`${ts()} [PROXY_ERROR ${sessionId}]:`, error);
+        console.error(`${ts()} [PROXY_ERROR ${sessionId}] ${request.method}:`, error);
         throw error;
       }
     };
