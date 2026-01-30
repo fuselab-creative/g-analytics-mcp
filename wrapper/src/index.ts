@@ -74,48 +74,7 @@ function createPythonServer(): ChildProcess {
   });
 }
 
-// Helper to send JSON-RPC request to Python server
-function sendToPython(pythonServer: ChildProcess, request: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const message = JSON.stringify(request) + '\n';
-    
-    let responseReceived = false;
-    const onData = (data: Buffer) => {
-      const lines = data.toString().split('\n');
-      for (const line of lines) {
-        if (line.trim()) {
-          try {
-            const response = JSON.parse(line);
-            if (response.id === request.id) {
-              responseReceived = true;
-              pythonServer.stdout?.removeListener('data', onData);
-              resolve(response);
-            }
-          } catch (e) {
-            // Ignore parse errors
-          }
-        }
-      }
-    };
-
-    pythonServer.stdout?.on('data', onData);
-
-    pythonServer.stdin?.write(message, (error) => {
-      if (error) {
-        pythonServer.stdout?.removeListener('data', onData);
-        reject(error);
-      }
-    });
-
-    // Timeout after 30 seconds
-    setTimeout(() => {
-      if (!responseReceived) {
-        pythonServer.stdout?.removeListener('data', onData);
-        reject(new Error('Request timeout'));
-      }
-    }, 30000);
-  });
-}
+// No longer needed - we stream directly from Python stdout to SSE
 
 console.log(`${ts()} Wrapper initialized, ready to accept SSE connections`);
 
@@ -143,20 +102,7 @@ app.get('/sse', async (req: Request, res: Response) => {
   // Start dedicated Python MCP server for this session
   const pythonServer = createPythonServer();
   
-  pythonServer.stderr?.on('data', (data) => {
-    console.error(`${ts()} [Python ${newSessionId}] ${data.toString()}`);
-  });
-
-  pythonServer.on('error', (error) => {
-    console.error(`${ts()} [ERROR ${newSessionId}] Failed to start Python:`, error);
-  });
-
-  pythonServer.on('exit', (code) => {
-    console.log(`${ts()} [EXIT ${newSessionId}] Python exited with code ${code}`);
-    sessions.delete(newSessionId);
-  });
-
-  // Setup SSE response
+  // Setup SSE response first
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -169,12 +115,47 @@ app.get('/sse', async (req: Request, res: Response) => {
   console.log(`${ts()} [SSE_CONNECT] New session: ${newSessionId}`);
 
   // Store session
-  sessions.set(newSessionId, {
+  const session: SessionData = {
     sessionId: newSessionId,
     pythonServer,
     response: res,
     messageBuffer: '',
     lastActivity: Date.now()
+  };
+  sessions.set(newSessionId, session);
+
+  // Forward Python stdout to SSE client
+  pythonServer.stdout?.on('data', (data) => {
+    session.messageBuffer += data.toString();
+    const lines = session.messageBuffer.split('\n');
+    session.messageBuffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.trim()) {
+        try {
+          const message = JSON.parse(line);
+          // Send message to client via SSE
+          res.write(`event: message\n`);
+          res.write(`data: ${JSON.stringify(message)}\n\n`);
+        } catch (e) {
+          console.error(`${ts()} [PARSE_ERROR ${newSessionId}]:`, line);
+        }
+      }
+    }
+  });
+  
+  pythonServer.stderr?.on('data', (data) => {
+    console.error(`${ts()} [Python ${newSessionId}] ${data.toString()}`);
+  });
+
+  pythonServer.on('error', (error) => {
+    console.error(`${ts()} [ERROR ${newSessionId}] Failed to start Python:`, error);
+  });
+
+  pythonServer.on('exit', (code) => {
+    console.log(`${ts()} [EXIT ${newSessionId}] Python exited with code ${code}`);
+    sessions.delete(newSessionId);
+    res.end();
   });
 
   // Handle client disconnect
@@ -200,13 +181,15 @@ app.post('/sse/message', async (req: Request, res: Response) => {
     session.lastActivity = Date.now();
     const message = req.body;
 
-    // Send to Python and get response
-    const response = await sendToPython(session.pythonServer, message);
+    // Write message to Python stdin
+    const jsonMessage = JSON.stringify(message) + '\n';
+    session.pythonServer.stdin?.write(jsonMessage, (error) => {
+      if (error) {
+        console.error(`${ts()} [WRITE_ERROR ${sessionId}]:`, error);
+      }
+    });
 
-    // Send response back via SSE
-    session.response.write(`event: message\n`);
-    session.response.write(`data: ${JSON.stringify(response)}\n\n`);
-
+    // Response will come via stdout and be forwarded through SSE
     res.status(202).send('Accepted');
   } catch (error) {
     console.error(`${ts()} [MESSAGE_ERROR]:`, error);
