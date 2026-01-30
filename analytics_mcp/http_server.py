@@ -17,6 +17,12 @@
 """HTTP server entry point for the Google Analytics MCP server with SSE support."""
 
 import os
+
+# Configure MCP to accept requests from any host (for proxies, tunnels, etc.)
+# MUST be set before importing MCP modules
+if "ALLOWED_HOSTS" not in os.environ:
+    os.environ["ALLOWED_HOSTS"] = "*"
+
 import contextlib
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -33,10 +39,6 @@ from analytics_mcp.tools.reporting import core  # noqa: F401
 async def lifespan(app: Starlette):
     async with mcp.session_manager.run():
         yield
-
-# Configure MCP to accept requests from any host (for proxies, tunnels, etc.)
-if "ALLOWED_HOSTS" not in os.environ:
-    os.environ["ALLOWED_HOSTS"] = "*"
 
 # Create both transport apps
 streamable_http = mcp.streamable_http_app()
