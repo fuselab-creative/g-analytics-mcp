@@ -22,4 +22,4 @@ of the server.
 from mcp.server.fastmcp import FastMCP
 
 # Creates the singleton.
-mcp = FastMCP("Google Analytics Server")
+mcp = FastMCP("Google Analytics Server", stateless_http=True)

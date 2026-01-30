@@ -22,30 +22,6 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Monkey-patch to disable host validation before importing MCP
-import sys
-if 'mcp.shared.transport_security' not in sys.modules:
-    # Create a dummy module that bypasses validation
-    from types import ModuleType
-    dummy_security = ModuleType('mcp.shared.transport_security')
-    
-    def validate_request_wrapper(original_func):
-        def wrapper(*args, **kwargs):
-            # Always return True to bypass validation
-            return True
-        return wrapper
-    
-    sys.modules['mcp.shared.transport_security'] = dummy_security
-    
-    # Try to patch the actual validation if it exists
-    try:
-        import mcp.shared.transport_security as ts
-        if hasattr(ts, 'validate_request'):
-            original_validate = ts.validate_request
-            ts.validate_request = lambda *args, **kwargs: True
-    except:
-        pass
-
 # Import the existing coordinator which has all tools registered
 from analytics_mcp.coordinator import mcp
 
