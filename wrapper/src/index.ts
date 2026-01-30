@@ -174,7 +174,7 @@ app.get('/sse', async (req: Request, res: Response) => {
   }
 });
 
-// POST endpoint for SSE messages - handled by SSEServerTransport automatically
+// POST endpoint for SSE messages - forward to SSEServerTransport
 app.post('/sse/message', async (req: Request, res: Response) => {
   const sessionId = req.query?.sessionId as string;
   const session = sessions.get(sessionId);
@@ -187,9 +187,21 @@ app.post('/sse/message', async (req: Request, res: Response) => {
 
   session.lastActivity = Date.now();
   
-  // SSEServerTransport handles the message automatically through the server
-  // Just need to acknowledge receipt
-  res.status(202).send('Accepted');
+  console.log(`${ts()} [POST_MESSAGE ${sessionId}] Received message:`, JSON.stringify(req.body).substring(0, 200));
+  
+  try {
+    // The SSEServerTransport should have a handlePostMessage method
+    const transport = (session.server as any)._transport;
+    if (transport && typeof transport.handlePostMessage === 'function') {
+      await transport.handlePostMessage(req as any, res as any);
+    } else {
+      console.error(`${ts()} [ERROR ${sessionId}] SSEServerTransport not found or no handlePostMessage`);
+      res.status(500).send('Transport not available');
+    }
+  } catch (error) {
+    console.error(`${ts()} [POST_ERROR ${sessionId}]:`, error);
+    res.status(500).send('Failed to process message');
+  }
 });
 
 // Start server
