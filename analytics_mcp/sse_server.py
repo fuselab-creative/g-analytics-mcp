@@ -45,6 +45,9 @@ def run_sse_server() -> None:
     mcp.settings.host = host
     mcp.settings.port = port
     
+    # Allow all hosts for external connections (disable Host header validation)
+    mcp.settings.allowed_hosts = ["*"]
+    
     print(f"Starting Google Analytics MCP server with SSE transport on {host}:{port}")
     
     # Run the server with SSE transport
