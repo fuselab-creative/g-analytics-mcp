@@ -20,6 +20,10 @@ of the server.
 """
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 # Creates the singleton.
-mcp = FastMCP("Google Analytics Server", stateless_http=True)
+mcp = FastMCP("Google Analytics Server",
+              transport_security=TransportSecuritySettings(
+                  enable_dns_rebinding_protection=False,
+              ))
