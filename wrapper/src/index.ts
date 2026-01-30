@@ -9,6 +9,7 @@ import { existsSync } from 'fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 
 const app = express();
 const PORT = parseInt(process.env.MCP_PORT || '8000');
@@ -40,8 +41,9 @@ const pythonBin = existsSync(venvPython) ? venvPython : 'python3';
 
 // Session management
 interface SessionData {
-  client: Client;
-  transport: StdioClientTransport;
+  server: Server;
+  pythonClient: Client;
+  pythonTransport: StdioClientTransport;
   lastActivity: number;
 }
 
@@ -55,7 +57,8 @@ setInterval(() => {
   for (const [sessionId, session] of sessions.entries()) {
     if (now - session.lastActivity > SESSION_TIMEOUT) {
       console.log(`${ts()} [CLEANUP] Inactive session: ${sessionId}`);
-      session.client.close().catch(() => {});
+      session.server.close().catch(() => {});
+      session.pythonClient.close().catch(() => {});
       sessions.delete(sessionId);
     }
   }
@@ -72,7 +75,7 @@ app.get('/', (req, res) => {
   res.send('Google Analytics MCP Wrapper - Connect via /sse');
 });
 
-// SSE endpoint - use MCP SDK to bridge SSE client to stdio Python server
+// SSE endpoint - create MCP Server that proxies to Python MCP server
 app.get('/sse', async (req: Request, res: Response) => {
   try {
     // Create SSE transport for client
@@ -81,8 +84,23 @@ app.get('/sse', async (req: Request, res: Response) => {
 
     console.log(`${ts()} [SSE_CONNECT] New session: ${sessionId}`);
 
+    // Create MCP Server to handle SSE client requests
+    const server = new Server(
+      {
+        name: 'analytics-mcp-wrapper',
+        version: '1.0.0'
+      },
+      {
+        capabilities: {
+          tools: {},
+          prompts: {},
+          resources: {}
+        }
+      }
+    );
+
     // Create stdio transport to Python MCP server
-    const stdioTransport = new StdioClientTransport({
+    const pythonTransport = new StdioClientTransport({
       command: pythonBin,
       args: ['analytics_mcp/server.py'],
       cwd: projectRoot,
@@ -94,9 +112,9 @@ app.get('/sse', async (req: Request, res: Response) => {
     });
 
     // Create MCP client to connect to Python server
-    const client = new Client(
+    const pythonClient = new Client(
       {
-        name: 'analytics-mcp-wrapper',
+        name: 'analytics-mcp-wrapper-client',
         version: '1.0.0'
       },
       {
@@ -104,28 +122,45 @@ app.get('/sse', async (req: Request, res: Response) => {
       }
     );
 
+    // Connect to Python MCP server
+    await pythonClient.connect(pythonTransport);
+    console.log(`${ts()} [CONNECTED ${sessionId}] Connected to Python MCP server`);
+
+    // Set up generic request handler to proxy all requests to Python
+    const originalOnRequest = (server as any).onrequest;
+    (server as any).onrequest = async (request: any, extra: any) => {
+      try {
+        // Forward any request to Python MCP server
+        const response = await pythonClient.request(
+          { method: request.method },
+          request.params || {}
+        );
+        return response;
+      } catch (error) {
+        console.error(`${ts()} [PROXY_ERROR ${sessionId}]:`, error);
+        throw error;
+      }
+    };
+
+    // Connect server to SSE transport first
+    await server.connect(sseTransport);
+    console.log(`${ts()} [SSE_READY ${sessionId}] SSE server ready for client`);
+
     // Store session
     sessions.set(sessionId, {
-      client,
-      transport: stdioTransport,
+      server,
+      pythonClient,
+      pythonTransport,
       lastActivity: Date.now()
     });
-
-    // Connect client to Python server via stdio
-    await client.connect(stdioTransport);
-
-    console.log(`${ts()} [CONNECTED ${sessionId}] Client connected to Python MCP server`);
 
     // Handle cleanup
     req.on('close', async () => {
       console.log(`${ts()} [SSE_CLOSE] Session disconnected: ${sessionId}`);
-      await client.close().catch(() => {});
+      await server.close().catch(() => {});
+      await pythonClient.close().catch(() => {});
       sessions.delete(sessionId);
     });
-
-    // Bridge: forward all requests from SSE client to Python server
-    // The SSEServerTransport will handle the SSE protocol automatically
-    // We just need to forward requests to the Python client
     
   } catch (error) {
     console.error(`${ts()} [SSE_ERROR]:`, error);
@@ -135,7 +170,7 @@ app.get('/sse', async (req: Request, res: Response) => {
   }
 });
 
-// POST endpoint for SSE messages
+// POST endpoint for SSE messages - handled by SSEServerTransport automatically
 app.post('/sse/message', async (req: Request, res: Response) => {
   const sessionId = req.query?.sessionId as string;
   const session = sessions.get(sessionId);
@@ -146,28 +181,11 @@ app.post('/sse/message', async (req: Request, res: Response) => {
     return;
   }
 
-  try {
-    session.lastActivity = Date.now();
-    const message = req.body;
-
-    // Forward request to Python MCP server via client
-    const response = await session.client.request(
-      message,
-      message.params || {}
-    );
-
-    res.json(response);
-  } catch (error) {
-    console.error(`${ts()} [MESSAGE_ERROR]:`, error);
-    res.status(500).json({
-      jsonrpc: '2.0',
-      error: {
-        code: -32603,
-        message: error instanceof Error ? error.message : 'Internal error'
-      },
-      id: req.body?.id
-    });
-  }
+  session.lastActivity = Date.now();
+  
+  // SSEServerTransport handles the message automatically through the server
+  // Just need to acknowledge receipt
+  res.status(202).send('Accepted');
 });
 
 // Start server
@@ -182,7 +200,8 @@ app.listen(PORT, HOST, () => {
 process.on('SIGINT', async () => {
   console.log(`${ts()} Shutting down...`);
   for (const [sessionId, session] of sessions.entries()) {
-    await session.client.close().catch(() => {});
+    await session.server.close().catch(() => {});
+    await session.pythonClient.close().catch(() => {});
   }
   process.exit(0);
 });
@@ -190,7 +209,8 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log(`${ts()} Shutting down...`);
   for (const [sessionId, session] of sessions.entries()) {
-    await session.client.close().catch(() => {});
+    await session.server.close().catch(() => {});
+    await session.pythonClient.close().catch(() => {});
   }
   process.exit(0);
 });
