@@ -58,3 +58,8 @@ dev = [
 [build-system]
 requires = ["setuptools>=69.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["analytics_mcp*"]
+exclude = ["wrapper*", "credentials*"]

@@ -1,0 +1,26 @@
+services:
+  analytics-mcp-wrapper:
+    build:
+      context: .
+      dockerfile: wrapper/Dockerfile
+    container_name: analytics-mcp-server
+    environment:
+      # Google Cloud credentials
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID:-}
+      # HTTP server configuration
+      - MCP_HOST=${MCP_HOST:-0.0.0.0}
+      - MCP_PORT=${MCP_PORT:-8000}
+    volumes:
+      # Mount Google Cloud credentials
+      - ./credentials:/credentials:ro
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-8000}:${MCP_PORT:-8000}"
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge
