@@ -13,6 +13,8 @@ services:
       # HTTP server configuration
       - MCP_HOST=${MCP_HOST:-0.0.0.0}
       - MCP_PORT=${MCP_PORT:-8000}
+      # Allow requests from any host (for proxies, tunnels, etc.)
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
     volumes:
       # Mount your Google Cloud credentials
       # Update the path on the left side to your actual credentials location
