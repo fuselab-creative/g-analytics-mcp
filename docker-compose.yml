@@ -1,0 +1,30 @@
+services:
+  analytics-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: analytics-mcp-server
+    environment:
+      # Google Cloud credentials - mount your credentials file
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+      # Optional: Set your Google Cloud project ID
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID:-}
+      # HTTP server configuration
+      - MCP_HOST=${MCP_HOST:-0.0.0.0}
+      - MCP_PORT=${MCP_PORT:-8000}
+    volumes:
+      # Mount your Google Cloud credentials
+      # Update the path on the left side to your actual credentials location
+      # Example for macOS/Linux: ~/.config/gcloud/application_default_credentials.json
+      - ./credentials:/credentials:ro
+    restart: unless-stopped
+    # Expose port for HTTP/SSE transport
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge
